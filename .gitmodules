@@ -1,7 +1,7 @@
 [submodule "src/guardian"]
 	path = src/guardian
 	url = https://github.com/cloudfoundry/guardian
-	branch = main
+	branch = with-oss-ci-export
 [submodule "src/garden"]
 	path = src/garden
 	url = https://github.com/cloudfoundry/garden
@@ -13,7 +13,7 @@
 [submodule "src/grootfs"]
 	path = src/grootfs
 	url = https://github.com/cloudfoundry/grootfs
-	branch = main
+	branch = with-oss-ci-export
 [submodule "src/idmapper"]
 	path = src/idmapper
 	url = https://github.com/cloudfoundry/idmapper
@@ -25,10 +25,10 @@
 [submodule "src/dontpanic"]
 	path = src/dontpanic
 	url = https://github.com/cloudfoundry/dontpanic
-	branch = main
+	branch = with-oss-ci-export
 [submodule "src/garden-performance-acceptance-tests"]
 	path = src/garden-performance-acceptance-tests
-	url = https://github.com/cloudfoundry/garden-performance-acceptance-tests.git
+	url = https://github.com/cloudfoundry/garden-performance-acceptance-tests
 	branch = main
 [submodule "src/gosub"]
 	path = src/gosub
