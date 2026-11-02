@@ -36,7 +36,19 @@ const (
 	//   - Windows spec section stripping (runsc rejects it)
 	//   - CREATED-task shim cleanup (host-PID intervention for stuck shims)
 	RunscRuntime
+
+	// KataRuntime is the Kata Containers runtime-v2 shim
+	// (io.containerd.kata.v2). Kata boots a VM per container at task create
+	// and snapshots the network namespace at that point, so the container's
+	// network must be configured before the task exists. It shares the
+	// alternative-runtime adaptations that do not depend on gVisor internals:
+	// exec-based streaming, containerd task-API metrics and CRI sandbox
+	// annotations. EXPERIMENTAL (CFAR-1511 spike).
+	KataRuntime
 )
+
+// KataRuntimeType is the containerd runtime-v2 shim name for Kata Containers.
+const KataRuntimeType = "io.containerd.kata.v2"
 
 // SupportedRuntimeType is the only non-stock runtime type validated for
 // the adaptations in this package. Other alternative runtimes (e.g. Kata)
@@ -58,13 +70,21 @@ func ResolveRuntimePolicy(runtimeType string) (RuntimePolicy, error) {
 		return StockRuntime, nil
 	case SupportedRuntimeType:
 		return RunscRuntime, nil
+	case KataRuntimeType:
+		return KataRuntime, nil
 	default:
 		return StockRuntime, fmt.Errorf(
-			"unsupported containerd runtime type %q: only stock runc (%s) and gVisor/runsc (%s) are validated; "+
+			"unsupported containerd runtime type %q: only stock runc (%s), gVisor/runsc (%s) and Kata (%s) are supported; "+
 				"configure an empty or supported runtime type",
-			runtimeType, StockRuntimeType, SupportedRuntimeType,
+			runtimeType, StockRuntimeType, SupportedRuntimeType, KataRuntimeType,
 		)
 	}
+}
+
+// NetworkBeforeCreate reports whether the container network namespace must be
+// created and configured before the containerd task is created.
+func (p RuntimePolicy) NetworkBeforeCreate() bool {
+	return p == KataRuntime
 }
 
 // IsAlternative returns true when the policy selects a non-stock runtime.
@@ -81,6 +101,8 @@ func (p RuntimePolicy) String() string {
 		return "stock"
 	case RunscRuntime:
 		return "runsc"
+	case KataRuntime:
+		return "kata"
 	default:
 		return fmt.Sprintf("RuntimePolicy(%d)", int(p))
 	}

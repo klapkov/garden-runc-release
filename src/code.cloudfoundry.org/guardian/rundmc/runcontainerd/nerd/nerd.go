@@ -61,7 +61,7 @@ func New(containerdClient *client.Client, context context.Context, ioFifoDir str
 
 func (n *Nerd) Create(log lager.Logger, containerID string, spec *specs.Spec, hostUID, hostGID uint32, pio func() (io.Reader, io.Writer, io.Writer)) (result error) {
 	log.Debug("creating-container", lager.Data{"containerID": containerID})
-	if n.policy == runcontainerd.RunscRuntime {
+	if n.policy == runcontainerd.RunscRuntime || n.policy == runcontainerd.KataRuntime {
 		spec.Windows = nil // runsc rejects the Windows section
 		if spec.Annotations == nil {
 			spec.Annotations = make(map[string]string)

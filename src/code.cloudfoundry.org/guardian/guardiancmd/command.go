@@ -389,6 +389,10 @@ func extractIPs(ipflags []IPFlag) []net.IP {
 	return ips
 }
 
+// kataNetnsDir holds the bind-mounted network namespaces Guardian creates
+// before task create for runtimes that need networking first (Kata).
+const kataNetnsDir = "/var/run/garden-netns"
+
 func (cmd *CommonCommand) wireNetworker(log lager.Logger, factory GardenFactory, propManager kawasaki.ConfigStore, portPool *ports.PortPool, networkDepot depot.NetworkDepot) (gardener.Networker, gardener.Starter, error) {
 	externalIP, err := defaultExternalIP(cmd.Network.ExternalIP)
 	if err != nil {
@@ -400,6 +404,12 @@ func (cmd *CommonCommand) wireNetworker(log lager.Logger, factory GardenFactory,
 
 	if cmd.Network.Plugin.Path() != "" {
 		resolvConfigurer := factory.WireResolvConfigurer()
+		var networkerOpts []netplugin.Option
+		if cmd.useContainerd() {
+			if policy, err := runcontainerd.ResolveRuntimePolicy(cmd.Containerd.RuntimeType); err == nil && policy.NetworkBeforeCreate() {
+				networkerOpts = append(networkerOpts, netplugin.WithNetworkBeforeCreate(kataNetnsDir))
+			}
+		}
 		externalNetworker := netplugin.New(
 			factory.CommandRunner(),
 			propManager,
@@ -410,6 +420,7 @@ func (cmd *CommonCommand) wireNetworker(log lager.Logger, factory GardenFactory,
 			cmd.Network.Plugin.Path(),
 			cmd.Network.PluginExtraArgs,
 			networkDepot,
+			networkerOpts...,
 		)
 		return externalNetworker, externalNetworker, nil
 	}

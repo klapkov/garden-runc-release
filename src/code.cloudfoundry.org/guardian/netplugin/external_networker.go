@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"code.cloudfoundry.org/commandrunner"
@@ -32,6 +34,18 @@ type externalBinaryNetworker struct {
 	path                  string
 	extraArg              []string
 	networkDepot          kawasaki.NetworkDepot
+	netnsDir              string
+}
+
+// Option configures optional externalBinaryNetworker behaviour.
+type Option func(*externalBinaryNetworker)
+
+// WithNetworkBeforeCreate makes the networker create and configure each
+// container's network namespace before the container task exists. The
+// namespace is bind-mounted under netnsDir/<handle>. Runtimes that boot a VM
+// at task create (Kata) need this, because they snapshot the namespace then.
+func WithNetworkBeforeCreate(netnsDir string) Option {
+	return func(p *externalBinaryNetworker) { p.netnsDir = netnsDir }
 }
 
 func New(
@@ -44,8 +58,9 @@ func New(
 	path string,
 	extraArg []string,
 	networkDepot kawasaki.NetworkDepot,
+	opts ...Option,
 ) ExternalNetworker {
-	return &externalBinaryNetworker{
+	p := &externalBinaryNetworker{
 		commandRunner:         commandRunner,
 		configStore:           configStore,
 		externalIP:            externalIP,
@@ -56,6 +71,10 @@ func New(
 		extraArg:              extraArg,
 		networkDepot:          networkDepot,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 type ExternalNetworker interface {
@@ -98,6 +117,40 @@ func (p *externalBinaryNetworker) SetupBindMounts(log lager.Logger, handle strin
 }
 
 func (p *externalBinaryNetworker) Network(log lager.Logger, containerSpec garden.ContainerSpec, pid int) error {
+	return p.network(log, containerSpec, pid, nil, fmt.Sprintf("/proc/%d/ns/net", pid))
+}
+
+// NetworksBeforeCreate reports whether WithNetworkBeforeCreate is active.
+func (p *externalBinaryNetworker) NetworksBeforeCreate() bool {
+	return p.netnsDir != ""
+}
+
+// NetworkNamespace creates a bind-mounted network namespace for the
+// container, configures it through the external networker (which receives the
+// namespace as inherited fd 3 with pid 0) and returns its path for the OCI spec.
+func (p *externalBinaryNetworker) NetworkNamespace(log lager.Logger, containerSpec garden.ContainerSpec) (string, error) {
+	log = log.Session("network-before-create")
+	nsPath := filepath.Join(p.netnsDir, containerSpec.Handle)
+
+	if err := createBoundNetns(nsPath); err != nil {
+		return "", err
+	}
+
+	nsFile, err := os.Open(nsPath)
+	if err != nil {
+		return "", fmt.Errorf("opening netns %s: %w", nsPath, err)
+	}
+	defer nsFile.Close()
+
+	if err := p.network(log, containerSpec, 0, nsFile, nsPath); err != nil {
+		return "", err
+	}
+
+	log.Info("configured", lager.Data{"netns": nsPath})
+	return nsPath, nil
+}
+
+func (p *externalBinaryNetworker) network(log lager.Logger, containerSpec garden.ContainerSpec, pid int, nsFile *os.File, nsPath string) error {
 	p.configStore.Set(containerSpec.Handle, gardener.ExternalIPKey, p.externalIP.String())
 
 	inputs := UpInputs{
@@ -107,8 +160,13 @@ func (p *externalBinaryNetworker) Network(log lager.Logger, containerSpec garden
 		NetIn:      containerSpec.NetIn,
 	}
 
+	var extraFiles []*os.File
+	if nsFile != nil {
+		extraFiles = []*os.File{nsFile}
+	}
+
 	outputs := UpOutputs{}
-	err := p.exec(log, "up", containerSpec.Handle, inputs, &outputs)
+	err := p.exec(log, "up", containerSpec.Handle, inputs, &outputs, extraFiles...)
 	if err != nil {
 		return err
 	}
@@ -117,7 +175,7 @@ func (p *externalBinaryNetworker) Network(log lager.Logger, containerSpec garden
 	// External network plugins (e.g. silk CNI) typically only create a veth pair.
 	// Runtimes like gVisor that build their own netstack by scraping the netns
 	// need lo to be present for applications binding to 127.0.0.1.
-	if err := setupLoopback(log, pid); err != nil {
+	if err := setupLoopback(log, nsPath); err != nil {
 		log.Error("setup-loopback", err)
 		// Non-fatal: runc brings up lo on its own, only gVisor needs this.
 	}
@@ -165,10 +223,10 @@ func (p *externalBinaryNetworker) Network(log lager.Logger, containerSpec garden
 // setupLoopback enters the container's network namespace and brings up the
 // loopback interface. This is needed for runtimes like gVisor that scrape the
 // netns for interfaces rather than creating lo themselves.
-func setupLoopback(log lager.Logger, pid int) error {
-	containerNS, err := netns.GetFromPid(pid)
+func setupLoopback(log lager.Logger, nsPath string) error {
+	containerNS, err := netns.GetFromPath(nsPath)
 	if err != nil {
-		return fmt.Errorf("getting netns for pid %d: %w", pid, err)
+		return fmt.Errorf("getting netns %s: %w", nsPath, err)
 	}
 	defer containerNS.Close()
 
@@ -188,7 +246,7 @@ func setupLoopback(log lager.Logger, pid int) error {
 		return fmt.Errorf("bringing up lo: %w", err)
 	}
 
-	log.Info("setup-loopback-success", lager.Data{"pid": pid})
+	log.Info("setup-loopback-success", lager.Data{"netns": nsPath})
 	return nil
 }
 
@@ -196,6 +254,12 @@ func (p *externalBinaryNetworker) Destroy(log lager.Logger, handle string) error
 	err := p.exec(log, "down", handle, nil, nil)
 	if err != nil {
 		return err
+	}
+
+	if p.netnsDir != "" {
+		if err := removeBoundNetns(filepath.Join(p.netnsDir, handle)); err != nil {
+			return err
+		}
 	}
 
 	return p.networkDepot.Destroy(log, handle)
@@ -295,7 +359,7 @@ func (p *externalBinaryNetworker) BulkNetOut(log lager.Logger, handle string, ru
 }
 
 func (p *externalBinaryNetworker) exec(log lager.Logger, action, handle string,
-	inputData interface{}, outputData interface{}) error {
+	inputData interface{}, outputData interface{}, extraFiles ...*os.File) error {
 
 	stdinBytes, err := json.Marshal(inputData)
 	if err != nil {
@@ -304,6 +368,7 @@ func (p *externalBinaryNetworker) exec(log lager.Logger, action, handle string,
 
 	args := append(p.extraArg, "--action", action, "--handle", handle)
 	cmd := exec.Command(p.path, args...)
+	cmd.ExtraFiles = extraFiles
 	stdout := &bytes.Buffer{}
 	cmd.Stdout = stdout
 	stderr := &bytes.Buffer{}

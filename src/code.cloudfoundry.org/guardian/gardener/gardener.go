@@ -80,6 +80,15 @@ type Networker interface {
 	Restore(log lager.Logger, handle string) error
 }
 
+// PreCreateNetworker is optionally implemented by networkers that can
+// configure a container's network namespace before its runtime task exists.
+// When NetworksBeforeCreate is true, the Gardener networks first and hands the
+// namespace path to the runtime instead of networking the task's init PID.
+type PreCreateNetworker interface {
+	NetworksBeforeCreate() bool
+	NetworkNamespace(log lager.Logger, spec garden.ContainerSpec) (string, error)
+}
+
 type Volumizer interface {
 	Create(log lager.Logger, spec garden.ContainerSpec) (specs.Spec, error)
 	VolumeDestroyMetricsGC
@@ -302,6 +311,16 @@ func (g *Gardener) Create(containerSpec garden.ContainerSpec) (ctr garden.Contai
 		BaseConfig: runtimeSpec,
 	}
 
+	preCreateNetworker, networkBeforeCreate := g.Networker.(PreCreateNetworker)
+	networkBeforeCreate = networkBeforeCreate && preCreateNetworker.NetworksBeforeCreate()
+	if networkBeforeCreate {
+		netnsPath, err := preCreateNetworker.NetworkNamespace(log, containerSpec)
+		if err != nil {
+			return nil, err
+		}
+		desiredSpec.Namespaces = map[string]string{"network": netnsPath}
+	}
+
 	if err := g.Containerizer.Create(log, desiredSpec); err != nil {
 		return nil, err
 	}
@@ -317,8 +336,10 @@ func (g *Gardener) Create(containerSpec garden.ContainerSpec) (ctr garden.Contai
 		return nil, err
 	}
 
-	if err = g.Networker.Network(log, containerSpec, actualSpec.Pid); err != nil {
-		return nil, err
+	if !networkBeforeCreate {
+		if err = g.Networker.Network(log, containerSpec, actualSpec.Pid); err != nil {
+			return nil, err
+		}
 	}
 
 	if err = g.Containerizer.Start(log, containerSpec.Handle); err != nil {
