@@ -59,6 +59,22 @@ func New(containerdClient *client.Client, context context.Context, ioFifoDir str
 	}
 }
 
+// setKataSandboxMemory sizes the Kata VM from the container's memory limit.
+// With static sandbox sizing, Kata reads a CRI sandbox's memory from this
+// annotation (VM = value + a small guest reserve) and otherwise boots the
+// configured default (2 GiB), regardless of the limit in the spec.
+func setKataSandboxMemory(spec *specs.Spec) {
+	if spec.Annotations["io.kubernetes.cri.container-type"] != "sandbox" {
+		return
+	}
+	if spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
+		return
+	}
+	if limit := spec.Linux.Resources.Memory.Limit; limit != nil && *limit > 0 {
+		spec.Annotations["io.kubernetes.cri.sandbox-memory"] = strconv.FormatInt(*limit, 10)
+	}
+}
+
 func (n *Nerd) Create(log lager.Logger, containerID string, spec *specs.Spec, hostUID, hostGID uint32, pio func() (io.Reader, io.Writer, io.Writer)) (result error) {
 	log.Debug("creating-container", lager.Data{"containerID": containerID})
 	if n.policy == runcontainerd.RunscRuntime || n.policy == runcontainerd.KataRuntime {
@@ -77,6 +93,9 @@ func (n *Nerd) Create(log lager.Logger, containerID string, spec *specs.Spec, ho
 			spec.Annotations["io.kubernetes.cri.sandbox-id"] = parent
 		} else if _, exists := spec.Annotations["io.kubernetes.cri.container-type"]; !exists {
 			spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
+		}
+		if n.policy == runcontainerd.KataRuntime {
+			setKataSandboxMemory(spec)
 		}
 	}
 	containerOpts := []client.NewContainerOpts{client.WithSpec(spec)}
