@@ -62,7 +62,7 @@ func (f runtimeWiringFactory) WireCPUCgrouper() (rundmc.CPUCgrouper, error) {
 }
 
 func TestContainerizerWithoutContainerdUsesStockStrategies(t *testing.T) {
-	for _, runtimeType := range []string{"", "io.containerd.runc.v2", "io.containerd.runsc.v1", "io.containerd.kata.v2"} {
+	for _, runtimeType := range []string{"", "io.containerd.runc.v2", "io.containerd.runsc.v1", "io.containerd.example.v2"} {
 		t.Run(runtimeType, func(t *testing.T) {
 			cmd := &CommonCommand{}
 			cmd.Containers.Dir = t.TempDir()
@@ -96,7 +96,7 @@ func TestContainerizerWithContainerdUsesValidatedStrategies(t *testing.T) {
 		{streamer: "*rundmc.NstarStreamer"},
 		{runtimeType: "io.containerd.runc.v2", streamer: "*rundmc.NstarStreamer"},
 		{runtimeType: "io.containerd.runsc.v1", streamer: "*rundmc.ExecStreamer", imageBackedPeas: true},
-		{runtimeType: "io.containerd.kata.v2", wantError: true},
+		{runtimeType: "io.containerd.example.v2", wantError: true},
 		{runtimeType: "io.containerd.runsc.v2", wantError: true},
 	} {
 		for _, containerdProcesses := range []bool{false, true} {
@@ -199,7 +199,7 @@ func TestResolveRuntimePolicyIsAlternative(t *testing.T) {
 			// ResolveRuntimePolicy returns an error, and the zero-value
 			// policy (StockRuntime) is not alternative — safe default.
 			name:        "unknown runtime is rejected with error",
-			runtimeType: "io.containerd.kata.v2",
+			runtimeType: "io.containerd.example.v2",
 			wantErr:     true,
 		},
 	}
@@ -556,7 +556,7 @@ func (rpc *runtimeMetricsTasksServer) Metrics(context.Context, *tasksapi.Metrics
 
 func TestWireContainerdRejectsUnsupportedRuntime(t *testing.T) {
 	unsupported := []string{
-		"io.containerd.kata.v2",
+		"io.containerd.example.v2",
 		"io.containerd.runsc.v2",
 		"custom-runtime",
 		"runc",
@@ -640,7 +640,7 @@ func TestRuntimePolicyBehaviorMatrix(t *testing.T) {
 		},
 		{
 			name:        "kata-v2: rejected at startup, no wiring decisions",
-			runtimeType: "io.containerd.kata.v2",
+			runtimeType: "io.containerd.example.v2",
 			wantReject:  true,
 		},
 		{
