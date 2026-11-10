@@ -93,13 +93,20 @@ func flattenPeerAddresses(nsPath string) error {
 			if err != nil {
 				return fmt.Errorf("listing routes on %s: %w", link.Attrs().Name, err)
 			}
-
-			if err := h.AddrDel(link, &addr); err != nil {
-				return fmt.Errorf("deleting peer address %s: %w", addr, err)
+			// silk pins the gateway MAC with a permanent neighbor on a NOARP link.
+			neighs, err := h.NeighList(link.Attrs().Index, netlink.FAMILY_V4)
+			if err != nil {
+				return fmt.Errorf("listing neighbors on %s: %w", link.Attrs().Name, err)
 			}
+
+			// Add the plain address before deleting the peer one: removing the
+			// last IPv4 address flushes the link's neighbors, permanent included.
 			local := &netlink.Addr{IPNet: &net.IPNet{IP: addr.IP, Mask: net.CIDRMask(32, 32)}}
 			if err := h.AddrAdd(link, local); err != nil {
 				return fmt.Errorf("adding address %s: %w", local, err)
+			}
+			if err := h.AddrDel(link, &addr); err != nil {
+				return fmt.Errorf("deleting peer address %s: %w", addr, err)
 			}
 
 			peerRoute := &netlink.Route{
@@ -119,6 +126,16 @@ func flattenPeerAddresses(nsPath string) error {
 				r.Src = addr.IP
 				if err := h.RouteReplace(&r); err != nil {
 					return fmt.Errorf("restoring route %s: %w", r, err)
+				}
+			}
+
+			for _, n := range neighs {
+				if n.State&netlink.NUD_PERMANENT == 0 {
+					continue
+				}
+				n := n
+				if err := h.NeighSet(&n); err != nil {
+					return fmt.Errorf("restoring neighbor %s: %w", n.IP, err)
 				}
 			}
 		}
