@@ -187,6 +187,10 @@ type Gardener struct {
 
 	AllowPrivilgedContainers bool
 
+	// NoUserNamespace makes unprivileged containers run without a user
+	// namespace, with an unshifted rootfs. Set for VM-isolated runtimes (Kata).
+	NoUserNamespace bool
+
 	ContainerNetworkMetricsProvider ContainerNetworkMetricsProvider
 }
 
@@ -291,12 +295,16 @@ func (g *Gardener) Create(containerSpec garden.ContainerSpec) (ctr garden.Contai
 		}
 	}
 
-	runtimeSpec, err := g.Volumizer.Create(log, containerSpec)
+	volumeSpec := containerSpec
+	if g.NoUserNamespace {
+		volumeSpec.Privileged = true
+	}
+	runtimeSpec, err := g.Volumizer.Create(log, volumeSpec)
 	if err != nil {
 		return nil, err
 	}
 
-	networkBindMounts, err := g.Networker.SetupBindMounts(log, containerSpec.Handle, containerSpec.Privileged, runtimeSpec.Root.Path)
+	networkBindMounts, err := g.Networker.SetupBindMounts(log, containerSpec.Handle, volumeSpec.Privileged, runtimeSpec.Root.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +317,8 @@ func (g *Gardener) Create(containerSpec garden.ContainerSpec) (ctr garden.Contai
 		BindMounts: append(containerSpec.BindMounts, networkBindMounts...),
 		Limits:     containerSpec.Limits,
 		BaseConfig: runtimeSpec,
+
+		NoUserNamespace: g.NoUserNamespace,
 	}
 
 	preCreateNetworker, networkBeforeCreate := g.Networker.(PreCreateNetworker)

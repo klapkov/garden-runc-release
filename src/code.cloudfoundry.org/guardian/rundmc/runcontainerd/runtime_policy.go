@@ -87,6 +87,13 @@ func (p RuntimePolicy) NetworkBeforeCreate() bool {
 	return p == KataRuntime
 }
 
+// NoUserNamespace reports whether containers must run without a user
+// namespace. The Kata guest agent cannot recreate Garden's ID mappings (EPERM),
+// and the VM boundary replaces the user namespace as the isolation layer.
+func (p RuntimePolicy) NoUserNamespace() bool {
+	return p == KataRuntime
+}
+
 // IsAlternative returns true when the policy selects a non-stock runtime.
 // This replaces the scattered != "" && != RuntimeRuncV2 predicates that
 // were duplicated across guardiancmd, nerd, and command_linux.

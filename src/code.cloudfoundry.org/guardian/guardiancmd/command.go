@@ -230,7 +230,7 @@ type commandWiring struct {
 }
 
 func (cmd *CommonCommand) createGardener(wiring *commandWiring) *gardener.Gardener {
-	return gardener.New(wiring.UidGenerator,
+	g := gardener.New(wiring.UidGenerator,
 		wiring.Starter,
 		wiring.SysInfoProvider,
 		wiring.Networker,
@@ -244,6 +244,12 @@ func (cmd *CommonCommand) createGardener(wiring *commandWiring) *gardener.Garden
 		!cmd.Containers.DisablePrivilgedContainers,
 		wiring.ContainerNetworkMetricsProvider,
 	)
+	if cmd.useContainerd() {
+		if policy, err := runcontainerd.ResolveRuntimePolicy(cmd.Containerd.RuntimeType); err == nil {
+			g.NoUserNamespace = policy.NoUserNamespace()
+		}
+	}
+	return g
 }
 
 func (cmd *CommonCommand) createWiring(logger lager.Logger, metricsProvider *metrics.MetricsProvider) (*commandWiring, error) {

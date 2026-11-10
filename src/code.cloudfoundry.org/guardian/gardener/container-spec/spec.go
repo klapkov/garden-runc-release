@@ -49,6 +49,11 @@ type DesiredContainerSpec struct {
 	// Container is privileged
 	Privileged bool
 
+	// NoUserNamespace keeps the unprivileged base but drops the user namespace
+	// and ID mappings. Used for VM-isolated runtimes (Kata) whose guest agent
+	// cannot recreate the host's user namespace.
+	NoUserNamespace bool
+
 	Limits garden.Limits
 
 	BaseConfig specs.Spec
