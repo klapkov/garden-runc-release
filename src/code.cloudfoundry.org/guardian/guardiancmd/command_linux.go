@@ -163,7 +163,7 @@ func (f *LinuxFactory) WireContainerd(processBuilder *processes.ProcBuilder, use
 	nerdStopper := nerdpkg.NewNerdStopper(containerdClient)
 	pidGetter := &runcontainerd.PidGetter{Nerd: nerd}
 
-	cgroupManager := runcontainerd.NewCgroupManager(containerdRuncRoot(), containerdNamespace)
+	cgroupManager := runcontainerd.NewCgroupManagerWithPolicy(containerdRuncRoot(), containerdNamespace, policy)
 
 	// For non-stock runtimes (validated: gVisor/runsc), use containerd task API
 	// for metrics instead of shelling out to runc which has no knowledge of the

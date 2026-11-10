@@ -20,6 +20,9 @@ func (m cgroupManager) setUnifiedResources(bundle goci.Bndl) error {
 		cgroupPath := filepath.Join(fs2.UnifiedMountpoint, bundle.Spec.Linux.CgroupsPath)
 
 		resources := convertSpecResourcesToCgroupResources(bundle.Spec.Linux.Resources)
+		if resources != nil && m.policy == KataRuntime {
+			addKataSandboxOverhead(resources)
+		}
 		if resources != nil {
 			cgroupManager, err := fs2.NewManager(&cgroups.Cgroup{}, cgroupPath)
 			if err != nil {
@@ -39,6 +42,17 @@ func (m cgroupManager) setUnifiedResources(bundle goci.Bndl) error {
 	}
 
 	return nil
+}
+
+// addKataSandboxOverhead raises only the cgroup limits; the spec keeps the app
+// limit because the VM is sized from it.
+func addKataSandboxOverhead(resources *cgroups.Resources) {
+	if resources.Memory > 0 {
+		resources.Memory += KataSandboxMemoryOverhead
+	}
+	if resources.MemorySwap > 0 {
+		resources.MemorySwap += KataSandboxMemoryOverhead
+	}
 }
 
 func convertSpecResourcesToCgroupResources(specResources *specs.LinuxResources) *cgroups.Resources {
