@@ -146,6 +146,10 @@ func (p *externalBinaryNetworker) NetworkNamespace(log lager.Logger, containerSp
 		return "", err
 	}
 
+	if err := flattenPeerAddresses(nsPath); err != nil {
+		return "", fmt.Errorf("flattening peer addresses: %w", err)
+	}
+
 	log.Info("configured", lager.Data{"netns": nsPath})
 	return nsPath, nil
 }
@@ -252,14 +256,15 @@ func setupLoopback(log lager.Logger, nsPath string) error {
 
 func (p *externalBinaryNetworker) Destroy(log lager.Logger, handle string) error {
 	err := p.exec(log, "down", handle, nil, nil)
-	if err != nil {
-		return err
-	}
 
 	if p.netnsDir != "" {
-		if err := removeBoundNetns(filepath.Join(p.netnsDir, handle)); err != nil {
-			return err
+		if nsErr := removeBoundNetns(filepath.Join(p.netnsDir, handle)); nsErr != nil && err == nil {
+			err = nsErr
 		}
+	}
+
+	if err != nil {
+		return err
 	}
 
 	return p.networkDepot.Destroy(log, handle)

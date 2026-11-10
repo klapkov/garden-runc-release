@@ -5,10 +5,13 @@ package netplugin
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
 
@@ -49,6 +52,76 @@ func createBoundNetns(path string) error {
 	if err := <-errCh; err != nil {
 		_ = os.Remove(path)
 		return err
+	}
+	return nil
+}
+
+// flattenPeerAddresses rewrites point-to-point addresses ("local peer P/32",
+// as configured by silk) into plain local/32 addresses plus an explicit
+// link-scope route to the peer, keeping the default route via the peer.
+// Kata mirrors IFA_ADDRESS into the guest, which for peer addresses is the
+// peer (gateway) IP, so the guest would otherwise send with the wrong source.
+func flattenPeerAddresses(nsPath string) error {
+	ns, err := netns.GetFromPath(nsPath)
+	if err != nil {
+		return fmt.Errorf("getting netns %s: %w", nsPath, err)
+	}
+	defer ns.Close()
+
+	h, err := netlink.NewHandleAt(ns)
+	if err != nil {
+		return fmt.Errorf("netlink handle in %s: %w", nsPath, err)
+	}
+	defer h.Close()
+
+	links, err := h.LinkList()
+	if err != nil {
+		return fmt.Errorf("listing links: %w", err)
+	}
+
+	for _, link := range links {
+		addrs, err := h.AddrList(link, netlink.FAMILY_V4)
+		if err != nil {
+			return fmt.Errorf("listing addresses on %s: %w", link.Attrs().Name, err)
+		}
+		for _, addr := range addrs {
+			if addr.Peer == nil || addr.Peer.IP.Equal(addr.IP) {
+				continue
+			}
+
+			routes, err := h.RouteList(link, netlink.FAMILY_V4)
+			if err != nil {
+				return fmt.Errorf("listing routes on %s: %w", link.Attrs().Name, err)
+			}
+
+			if err := h.AddrDel(link, &addr); err != nil {
+				return fmt.Errorf("deleting peer address %s: %w", addr, err)
+			}
+			local := &netlink.Addr{IPNet: &net.IPNet{IP: addr.IP, Mask: net.CIDRMask(32, 32)}}
+			if err := h.AddrAdd(link, local); err != nil {
+				return fmt.Errorf("adding address %s: %w", local, err)
+			}
+
+			peerRoute := &netlink.Route{
+				LinkIndex: link.Attrs().Index,
+				Dst:       &net.IPNet{IP: addr.Peer.IP, Mask: net.CIDRMask(32, 32)},
+				Scope:     netlink.SCOPE_LINK,
+				Src:       addr.IP,
+			}
+			if err := h.RouteReplace(peerRoute); err != nil {
+				return fmt.Errorf("adding peer route via %s: %w", link.Attrs().Name, err)
+			}
+
+			for _, r := range routes {
+				if r.Gw == nil || r.Protocol == unix.RTPROT_KERNEL {
+					continue
+				}
+				r.Src = addr.IP
+				if err := h.RouteReplace(&r); err != nil {
+					return fmt.Errorf("restoring route %s: %w", r, err)
+				}
+			}
+		}
 	}
 	return nil
 }
