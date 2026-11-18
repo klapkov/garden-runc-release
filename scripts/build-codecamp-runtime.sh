@@ -5,7 +5,7 @@ source_dir=${1:?source checkout required}
 output_dir=${2:?new output directory required}
 revision=${3:?exact source commit required}
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || { echo 'Requires native Linux amd64' >&2; exit 2; }
-for compiler in /usr/bin/x86_64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc; do
+for compiler in /usr/bin/x86_64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-g++; do
   [[ -x "$compiler" ]] || { echo "Missing build compiler: $compiler" >&2; exit 2; }
 done
 source_dir=$(cd "$source_dir" && pwd)
