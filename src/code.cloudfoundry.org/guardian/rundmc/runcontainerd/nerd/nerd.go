@@ -83,6 +83,10 @@ func (n *Nerd) Create(log lager.Logger, containerID string, spec *specs.Spec, ho
 			spec.Annotations = make(map[string]string)
 		}
 		if spec.Annotations["container-type"] == "pea" {
+			if n.policy == runcontainerd.RunscRuntime {
+				// Only the app parent reports aggregate sandbox statistics.
+				delete(spec.Annotations, "dev.gvisor.stats.scope")
+			}
 			parent := spec.Annotations["sandbox-container"]
 			if parent == "" || parent == containerID {
 				return fmt.Errorf("pea %s requires a distinct sandbox-container", containerID)
@@ -96,6 +100,9 @@ func (n *Nerd) Create(log lager.Logger, containerID string, spec *specs.Spec, ho
 		}
 		if n.policy == runcontainerd.KataRuntime {
 			setKataSandboxMemory(spec)
+		}
+		if n.policy == runcontainerd.RunscRuntime && spec.Annotations["container-type"] == "garden-init" {
+			spec.Annotations["dev.gvisor.stats.scope"] = "sandbox"
 		}
 	}
 	containerOpts := []client.NewContainerOpts{client.WithSpec(spec)}
@@ -326,6 +333,15 @@ func (n *Nerd) tryToGetStatus(log lager.Logger, task client.Task) (client.Status
 	for i := 0; i < retries; i++ {
 		status, err := task.Status(n.context)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				log.Info("retrying-after-status-error", lager.Data{"retry-number": i + 1, "error": err.Error()})
+				select {
+				case <-time.After(500 * time.Millisecond):
+				case <-n.context.Done():
+					return client.Status{}, n.context.Err()
+				}
+				continue
+			}
 			return client.Status{}, err
 		}
 
@@ -476,17 +492,31 @@ func (n *Nerd) GetContainerPID(log lager.Logger, containerID string) (uint32, er
 }
 
 func (n *Nerd) loadContainer(log lager.Logger, containerID string) (client.Container, error) {
-	log.Debug("loading-container", lager.Data{"containerID": containerID})
-	container, err := n.client.LoadContainer(n.context, containerID)
-	if err != nil {
-		if errdefs.IsNotFound(err) {
-			log.Debug("container-not-found", lager.Data{"containerID": containerID})
-			return nil, runcontainerd.ContainerNotFoundError{Handle: containerID}
+	log = log.Session("load-container", lager.Data{"containerID": containerID})
+	const retries = 5
+	var lastErr error
+	for i := 0; i < retries; i++ {
+		container, err := n.client.LoadContainer(n.context, containerID)
+		if err != nil {
+			if errdefs.IsNotFound(err) {
+				log.Debug("container-not-found")
+				return nil, runcontainerd.ContainerNotFoundError{Handle: containerID}
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				lastErr = err
+				log.Info("retrying-after-load-error", lager.Data{"retry-number": i + 1, "error": err.Error()})
+				select {
+				case <-time.After(500 * time.Millisecond):
+				case <-n.context.Done():
+					return nil, n.context.Err()
+				}
+				continue
+			}
+			return nil, err
 		}
-		log.Debug("loading-container-failed", lager.Data{"containerID": containerID})
-		return nil, err
+		return container, nil
 	}
-	return container, nil
+	return nil, fmt.Errorf("loading container %s: retries exhausted: %w", containerID, lastErr)
 }
 
 func (n *Nerd) loadContainers(labels ...runcontainerd.ContainerFilter) ([]client.Container, error) {

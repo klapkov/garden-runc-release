@@ -33,8 +33,13 @@ func TestResolveRuntimePolicy(t *testing.T) {
 			wantPolicy:  runcontainerd.RunscRuntime,
 		},
 		{
+			name:        "kata-v2 resolves to kata policy",
+			runtimeType: runcontainerd.KataRuntimeType,
+			wantPolicy:  runcontainerd.KataRuntime,
+		},
+		{
 			name:        "unknown runtime is rejected",
-			runtimeType: "io.containerd.kata.v2",
+			runtimeType: "io.containerd.unsupported.v2",
 			wantErr:     true,
 		},
 		{
@@ -55,8 +60,8 @@ func TestResolveRuntimePolicy(t *testing.T) {
 				if err == nil {
 					t.Fatalf("ResolveRuntimePolicy(%q) = %v, nil; want error", tt.runtimeType, policy)
 				}
-				// Error message should mention the unsupported type and both supported alternatives
-				for _, want := range []string{tt.runtimeType, runcontainerd.StockRuntimeType, runcontainerd.SupportedRuntimeType} {
+				// Error message should mention the unsupported type and supported runtimes.
+				for _, want := range []string{tt.runtimeType, runcontainerd.StockRuntimeType, runcontainerd.SupportedRuntimeType, runcontainerd.KataRuntimeType} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("error %q does not mention %q", err.Error(), want)
 					}
@@ -80,6 +85,9 @@ func TestRuntimePolicyIsAlternative(t *testing.T) {
 	if !runcontainerd.RunscRuntime.IsAlternative() {
 		t.Error("RunscRuntime.IsAlternative() = false, want true")
 	}
+	if !runcontainerd.KataRuntime.IsAlternative() {
+		t.Error("KataRuntime.IsAlternative() = false, want true")
+	}
 }
 
 func TestRuntimePolicyString(t *testing.T) {
@@ -89,6 +97,7 @@ func TestRuntimePolicyString(t *testing.T) {
 	}{
 		{runcontainerd.StockRuntime, "stock"},
 		{runcontainerd.RunscRuntime, "runsc"},
+		{runcontainerd.KataRuntime, "kata"},
 	}
 	for _, tt := range tests {
 		if got := tt.policy.String(); got != tt.want {

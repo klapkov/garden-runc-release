@@ -10,8 +10,8 @@ import (
 // It is resolved once at Guardian startup from the configured runtime type
 // and carried through the container lifecycle without re-parsing the string.
 //
-// Only two policies are supported: StockRuntime (default runc-v2) and
-// RunscRuntime (validated gVisor/runsc shim). Unsupported runtime types
+// Supported policies are StockRuntime, RunscRuntime and experimental KataRuntime.
+// Unsupported runtime types
 // are rejected at startup with an actionable error. This prevents unknown
 // runtimes from silently inheriting runsc-specific workarounds such as
 // CREATED-task shim cleanup, grouped image-backed peas, or exec-based
@@ -34,7 +34,7 @@ const (
 	//   - image-backed grouped peas (requires use_containerd_for_processes)
 	//   - runsc-specific OCI task options (no NoNewKeyring, no UID/GID)
 	//   - Windows spec section stripping (runsc rejects it)
-	//   - CREATED-task shim cleanup (host-PID intervention for stuck shims)
+	//   - CREATED-task cleanup through the public TaskService Delete API
 	RunscRuntime
 
 	// KataRuntime is the Kata Containers runtime-v2 shim
@@ -50,9 +50,8 @@ const (
 // KataRuntimeType is the containerd runtime-v2 shim name for Kata Containers.
 const KataRuntimeType = "io.containerd.kata.v2"
 
-// SupportedRuntimeType is the only non-stock runtime type validated for
-// the adaptations in this package. Other alternative runtimes (e.g. Kata)
-// are not supported and are rejected at startup.
+// SupportedRuntimeType selects gVisor-specific adaptations. Kata uses its own
+// runtime type and policy, without inheriting runsc-only workarounds.
 const SupportedRuntimeType = "io.containerd.runsc.v1"
 
 // StockRuntimeType is the containerd plugin ID for the stock runc-v2 shim,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	gardencgroups "code.cloudfoundry.org/guardian/rundmc/cgroups"
 
@@ -19,6 +20,7 @@ const (
 	// unlimitedMemory is the value cgroup v2 uses to represent "no limit" for
 	// memory.max / memory.swap.max.
 	unlimitedMemory = "max"
+	ioMaxFile       = "io.max"
 )
 
 // memoryLimitFiles lists the cgroup v2 memory-limit files that must follow a
@@ -74,6 +76,9 @@ func (c CPUCgroupEnforcer) Punish(logger lager.Logger, handle string) error {
 	// in cgroups v2 containerd garden-init process is added to init cgroup
 	goodInitCgroupPath := filepath.Join(goodContainerCgroupPath, gardencgroups.InitCgroupName)
 	if exists(logger, goodInitCgroupPath) {
+		if err := c.copyIOLimits(logger, goodInitCgroupPath, badContainerCgroupPath); err != nil {
+			return err
+		}
 		if err := c.copyShares(goodInitCgroupPath, badContainerCgroupPath); err != nil {
 			return err
 		}
@@ -85,6 +90,9 @@ func (c CPUCgroupEnforcer) Punish(logger lager.Logger, handle string) error {
 		return c.updateContainerStateCgroupPath(handle, badContainerCgroupPath)
 	}
 
+	if err := c.copyIOLimits(logger, goodContainerCgroupPath, badContainerCgroupPath); err != nil {
+		return err
+	}
 	if err := c.copyShares(goodContainerCgroupPath, badContainerCgroupPath); err != nil {
 		return err
 	}
@@ -118,6 +126,7 @@ func (c CPUCgroupEnforcer) Release(logger lager.Logger, handle string) error {
 		// Best-effort cleanup of the now-empty bad cgroup: the container is
 		// already released and running in the good cgroup, so a failure here
 		// must not fail Release and make callers think it is still throttled.
+		// Keep io.max: writeback can remain attributed to an empty cgroup.
 		if err := c.clearMemoryLimits(logger, badContainerCgroupPath); err != nil {
 			logger.Error("clear-memory-limits-failed", err, lager.Data{"handle": handle})
 		}
@@ -235,6 +244,29 @@ func (c CPUCgroupEnforcer) clearMemoryLimits(logger lager.Logger, cgroupPath str
 	}
 
 	return nil
+}
+
+// copyIOLimits preserves cgroup v2 disk limits before moving processes to the
+// CPU-throttled group. On v1, blkio uses a separate, unaffected hierarchy.
+// A failed write must prevent the move, rather than drop enforcement.
+func (c CPUCgroupEnforcer) copyIOLimits(logger lager.Logger, fromCgroup, toCgroup string) error {
+	if !cgroups.IsCgroup2UnifiedMode() {
+		return nil
+	}
+	content, err := cgroups.ReadFile(fromCgroup, ioMaxFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Info("io-max-source-absent-skip", lager.Data{"dir": fromCgroup})
+			return nil
+		}
+		return err
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	// The kernel accepts one device entry per write; do not create missing files.
+	return cgroups.WriteFileByLine(toCgroup, ioMaxFile, content)
 }
 
 // Runc pulls container cgroup path from the container state file

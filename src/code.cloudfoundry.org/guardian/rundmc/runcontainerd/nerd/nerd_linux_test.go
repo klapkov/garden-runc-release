@@ -288,17 +288,21 @@ func TestNerdRuntimePolicyCreatePayload(t *testing.T) {
 		wantContainerType string
 		wantSandboxID     string
 		wantTTY           bool
+		wantStatsScope    string
 	}{
 		{wantRuntime: "io.containerd.runc.v2", wantWindows: true, wantOptions: true},
 		{runtimeType: "io.containerd.runc.v2", wantRuntime: "io.containerd.runc.v2", wantWindows: true, wantOptions: true},
 		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", wantContainerType: "sandbox"},
-		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"container-type": "garden-init"}, wantContainerType: "sandbox"},
+		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"container-type": "garden-init"}, wantContainerType: "sandbox", wantStatsScope: "sandbox"},
 		{runtimeType: "io.containerd.runc.v2", wantRuntime: "io.containerd.runc.v2", wantWindows: true, wantOptions: true, annotations: map[string]string{"container-type": "garden-init"}},
 		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"sentinel": "retained"}, wantContainerType: "sandbox"},
 		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"io.kubernetes.cri.container-type": "container"}, wantContainerType: "container"},
 		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"container-type": "pea", "sandbox-container": "garden-parent", "sentinel": "retained"}, wantContainerType: "container", wantSandboxID: "garden-parent"},
 		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"container-type": "pea", "sandbox-container": "garden-parent"}, wantContainerType: "container", wantSandboxID: "garden-parent", wantTTY: true},
 		{runtimeType: "io.containerd.runc.v2", wantRuntime: "io.containerd.runc.v2", wantWindows: true, wantOptions: true, annotations: map[string]string{"container-type": "pea", "sandbox-container": "garden-parent"}, wantTTY: true},
+		{runtimeType: "io.containerd.runsc.v1", wantRuntime: "io.containerd.runsc.v1", annotations: map[string]string{"container-type": "pea", "sandbox-container": "garden-parent", "dev.gvisor.stats.scope": "sandbox"}, wantContainerType: "container", wantSandboxID: "garden-parent"},
+		{runtimeType: "io.containerd.kata.v2", wantRuntime: "io.containerd.kata.v2", annotations: map[string]string{"container-type": "garden-init"}, wantContainerType: "sandbox"},
+		{runtimeType: "io.containerd.kata.v2", wantRuntime: "io.containerd.kata.v2", annotations: map[string]string{"container-type": "pea", "sandbox-container": "garden-parent"}, wantContainerType: "container", wantSandboxID: "garden-parent"},
 	} {
 		t.Run(test.runtimeType, func(t *testing.T) {
 			socketDir, err := os.MkdirTemp("", "nerd-policy-")
@@ -347,7 +351,7 @@ func TestNerdRuntimePolicyCreatePayload(t *testing.T) {
 			// The fixture deliberately exposes a task after failed Create. Owned
 			// rollback must reach its runtime-specific delete path before returning.
 			rollback := taskRPC.deleted
-			if test.wantOptions {
+			if policy != runcontainerd.RunscRuntime {
 				rollback = taskRPC.killed
 			}
 			select {
@@ -363,7 +367,7 @@ func TestNerdRuntimePolicyCreatePayload(t *testing.T) {
 				if request.ID != "policy-container" || request.Runtime.Name != test.wantRuntime {
 					t.Errorf("container identity/runtime = %+v", request)
 				}
-				if !test.wantOptions {
+				if policy == runcontainerd.RunscRuntime {
 					options := request.Runtime.Options
 					if options == nil || options.TypeUrl != "runtimeoptions.v1.Options" {
 						t.Fatalf("runsc runtime options = %v, want runtimeoptions.v1.Options", options)
@@ -396,6 +400,9 @@ func TestNerdRuntimePolicyCreatePayload(t *testing.T) {
 				if emitted.Annotations["sentinel"] != wantSentinel {
 					t.Error("unrelated annotation lost")
 				}
+				if got := emitted.Annotations["dev.gvisor.stats.scope"]; got != test.wantStatsScope {
+					t.Errorf("stats scope = %q, want %q", got, test.wantStatsScope)
+				}
 			default:
 				t.Fatal("no container creation payload")
 			}
@@ -426,7 +433,7 @@ func TestNerdRuntimePolicyCreatePayload(t *testing.T) {
 				t.Fatal("no task creation payload")
 			}
 			err = manager.Delete(lager.NewLogger("nerd-policy-delete"), "policy-container")
-			if test.wantOptions {
+			if policy != runcontainerd.RunscRuntime {
 				if err == nil || !strings.Contains(err.Error(), "policy fixture stops before task signaling") {
 					t.Errorf("stock Delete error = %v, want ordinary task cleanup", err)
 				}
