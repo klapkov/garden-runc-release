@@ -51,7 +51,7 @@ for name, metadata in record["artifacts"].items():
 args.output.mkdir(parents=True, exist_ok=False)
 out = args.output.resolve()
 release = out / "source"
-subprocess.run(["bosh", "init-release", "--dir", str(release)], check=True)
+subprocess.run(["bosh", "init-release", "--git", "--dir", str(release)], check=True)
 with tarfile.open(args.templates) as archive:
     for member in archive:
         name = pathlib.PurePosixPath(member.name)
@@ -69,14 +69,19 @@ with tarfile.open(args.templates) as archive:
         target.chmod(member.mode & 0o777)
 for name, blob in blobs.items():
     subprocess.run(["bosh", "add-blob", str((args.build / "release" / name).resolve()), blob], cwd=release, check=True)
-archive = out / f"runtime-gvisor-{args.version}.tgz"
-subprocess.run(["bosh", "create-release", "--name", "runtime-gvisor", "--version", args.version,
-                "--force", "--tarball", str(archive)], cwd=release, check=True)
 record.update({"release": {"name": "runtime-gvisor", "version": args.version},
                "source_repository": "https://github.com/klapkov/gvisor.git",
                "templates_revision": args.templates_revision,
-               "templates_sha256": args.templates_sha256,
-               "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()})
+               "templates_sha256": args.templates_sha256})
+(release / "BUILD-PROVENANCE.json").write_text(json.dumps(record, indent=2) + "\n")
+subprocess.run(["git", "add", "jobs", "packages", "config", ".gitignore", "BUILD-PROVENANCE.json"], cwd=release, check=True)
+subprocess.run(["git", "-c", "user.name=Codecamp release build", "-c", "user.email=codecamp-build@localhost",
+                "commit", "-m", f"Package runtime from {args.source_revision}"], cwd=release, check=True)
+record["packaging_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=release, text=True).strip()
+archive = out / f"runtime-gvisor-{args.version}.tgz"
+subprocess.run(["bosh", "create-release", "--name", "runtime-gvisor", "--version", args.version,
+                "--force", "--tarball", str(archive)], cwd=release, check=True)
+record["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
 (out / "BUILD-PROVENANCE.json").write_text(json.dumps(record, indent=2) + "\n")
 shutil.copyfile(args.build / "runsc-version.txt", out / "runsc-version.txt")
 print(f"PACKAGED {archive} sha256={record['archive_sha256']}")
